@@ -1,0 +1,427 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>虚拟实验一：台风生成机制 (最终完美珍藏版)</title>
+    <style>
+        /* === 界面样式 === */
+        body { margin: 0; background-color: #0b0e14; color: #fff; font-family: "Microsoft YaHei", sans-serif; overflow: hidden; display: flex; flex-direction: column; align-items: center; height: 100vh; }
+
+        #container {
+            position: relative;
+            width: 1000px;
+            height: 650px;
+            background: #0f172a;
+            border: 1px solid #334155;
+            border-radius: 12px;
+            box-shadow: 0 20px 50px rgba(0,0,0,0.6);
+            margin-top: 30px;
+            overflow: hidden;
+        }
+
+        canvas { display: block; width: 100%; height: 100%; }
+
+        /* UI 面板 */
+        .panel {
+            position: absolute;
+            background: rgba(30, 41, 59, 0.9);
+            border: 1px solid rgba(255,255,255,0.1);
+            border-radius: 8px;
+            padding: 10px;
+            backdrop-filter: blur(5px);
+        }
+
+        /* 顶部提示 */
+        .top-tip {
+            position: absolute; top: 20px; width: 100%; text-align: center;
+            color: #94a3b8; font-size: 14px; letter-spacing: 1px; pointer-events: none;
+        }
+
+        /* 温度计 */
+        .temp-box {
+            bottom: 120px; left: 40px; width: 50px; height: 200px;
+            display: flex; flex-direction: column-reverse; align-items: center;
+        }
+        .temp-bg { width: 12px; height: 100%; background: #334155; border-radius: 6px; position: relative; overflow: hidden; }
+        .temp-fill { width: 100%; position: absolute; bottom: 0; height: 0%; background: linear-gradient(to top, #38bdf8, #f43f5e); transition: height 0.1s; }
+        .temp-text { position: absolute; top: -35px; font-weight: bold; font-family: monospace; font-size: 16px; width: 80px; text-align: center; }
+
+        /* 阈值线 */
+        .threshold-line {
+            position: absolute; bottom: 250px; left: 50px; 
+            width: 40px; border-top: 1px dashed #f43f5e; opacity: 0.8;
+        }
+        .threshold-text {
+            position: absolute; bottom: 245px; left: 95px; 
+            font-size: 12px; color: #f43f5e; font-weight: bold;
+        }
+
+        /* 加热器 */
+        .heater-coil {
+            position: absolute; bottom: 100px; left: 50%; transform: translateX(-50%);
+            width: 200px; height: 6px; background: #333; border-radius: 3px; transition: 0.3s;
+        }
+        .heater-coil.active { background: #f43f5e; box-shadow: 0 0 25px #f43f5e; }
+
+        /* 底部控制按钮 */
+        .controls {
+            bottom: 20px; left: 50%; transform: translateX(-50%);
+            display: flex; gap: 20px; z-index: 20;
+        }
+        button {
+            padding: 10px 24px; border: none; border-radius: 6px; font-weight: bold; font-size: 14px;
+            cursor: pointer; color: white; transition: 0.2s;
+        }
+        button:disabled { opacity: 0.5; cursor: not-allowed; filter: grayscale(1); }
+        button:active { transform: scale(0.96); }
+
+        .btn-heat { background: linear-gradient(135deg, #f43f5e, #e11d48); box-shadow: 0 4px 12px rgba(244, 63, 94, 0.4); }
+        .btn-create { background: linear-gradient(135deg, #38bdf8, #0ea5e9); box-shadow: 0 4px 12px rgba(56, 189, 248, 0.4); color: #0f172a; }
+        .btn-reset { background: #475569; }
+
+    </style>
+</head>
+<body>
+
+<div id="container">
+    <canvas id="canvas" width="1000" height="650"></canvas>
+
+    <div class="top-tip">操作指南：长按加热 → 水汽凝结 → 生成台风剖面</div>
+
+    <!-- 温度计 -->
+    <div class="panel temp-box">
+        <div class="temp-bg"><div class="temp-fill" id="tempBar"></div></div>
+        <div class="temp-text" id="tempVal">20.0°C</div>
+    </div>
+    
+    <div class="threshold-line"></div>
+    <div class="threshold-text">26.5°C</div>
+
+    <!-- 加热器 -->
+    <div class="heater-coil" id="heaterUI"></div>
+
+    <!-- 按钮 -->
+    <div class="panel controls">
+        <button class="btn-heat" id="btnHeat">按住加热</button>
+        <button class="btn-create" id="btnTyphoon" disabled onclick="app.toggleTyphoon()">生成台风</button>
+        <button class="btn-reset" onclick="app.reset()">重置实验</button>
+    </div>
+</div>
+
+<script>
+    const app = {
+        canvas: document.getElementById('canvas'),
+        ctx: document.getElementById('canvas').getContext('2d'),
+        
+        // 状态
+        isHeating: false,
+        temp: 20.0,
+        mode: 'experiment', 
+        
+        // 物理对象
+        iceBlocks: [],
+        particles: [], 
+        bubbles: [],
+        clouds: [],    
+        profileRain: [], 
+        
+        init: function() {
+            this.reset();
+            this.bindEvents();
+            this.animate();
+        },
+
+        reset: function() {
+            this.temp = 20.0;
+            this.isHeating = false;
+            this.mode = 'experiment';
+            this.particles = [];
+            this.bubbles = [];
+            this.clouds = [];
+            this.profileRain = [];
+            this.iceBlocks = [];
+            
+            // 初始化8块冰
+            for(let i=0; i<8; i++) {
+                this.iceBlocks.push({
+                    x: 300 + i * 50,
+                    y: 150, 
+                    h: 30, // 初始高度
+                    maxH: 30
+                });
+            }
+
+            const btn = document.getElementById('btnTyphoon');
+            btn.disabled = true;
+            btn.innerText = "生成台风";
+            btn.className = "btn-create";
+            document.getElementById('tempVal').style.color = "white";
+        },
+
+        bindEvents: function() {
+            const btn = document.getElementById('btnHeat');
+            const ui = document.getElementById('heaterUI');
+
+            const start = (e) => { e.preventDefault(); this.isHeating = true; ui.classList.add('active'); };
+            const end = (e) => { e.preventDefault(); this.isHeating = false; ui.classList.remove('active'); };
+
+            btn.addEventListener('mousedown', start);
+            btn.addEventListener('mouseup', end);
+            btn.addEventListener('mouseleave', end);
+            btn.addEventListener('touchstart', start);
+            btn.addEventListener('touchend', end);
+        },
+
+        toggleTyphoon: function() {
+            if (this.mode === 'experiment') {
+                this.mode = 'typhoon';
+                document.getElementById('btnTyphoon').innerText = "返回实验";
+                document.getElementById('btnTyphoon').className = "btn-heat";
+                this.initTyphoonClouds();
+            } else {
+                this.mode = 'experiment';
+                document.getElementById('btnTyphoon').innerText = "生成台风";
+                document.getElementById('btnTyphoon').className = "btn-create";
+                this.clouds = [];
+                this.profileRain = [];
+            }
+        },
+
+        initTyphoonClouds: function() {
+            const centerX = 500;
+            const eyeWidth = 50;
+            const wallWidth = 180;
+
+            for(let i=0; i<500; i++) {
+                this.clouds.push({
+                    x: (Math.random() > 0.5 ? 1 : -1) * (eyeWidth + Math.random() * wallWidth) + centerX,
+                    y: 550 - Math.random() * 450,
+                    r: 15 + Math.random() * 20,
+                    life: Math.random() * 100
+                });
+            }
+        },
+
+        animate: function() {
+            const ctx = this.ctx;
+            const W = 1000, H = 650;
+            ctx.clearRect(0, 0, W, H);
+
+            if (this.mode === 'experiment') {
+                this.drawExperiment(ctx, W, H);
+            } else {
+                this.drawTyphoonProfile(ctx, W, H);
+            }
+
+            requestAnimationFrame(() => this.animate());
+        },
+
+        // --- 场景1：加热与凝结 ---
+        drawExperiment: function(ctx, W, H) {
+            const waterY = 550;
+            const glassY = 150;
+
+            // 1. 温度逻辑
+            if (this.isHeating && this.temp < 30) this.temp += 0.05;
+            
+            const pct = Math.min(100, (this.temp - 20) / 8 * 100);
+            document.getElementById('tempBar').style.height = pct + "%";
+            document.getElementById('tempVal').innerText = this.temp.toFixed(1) + "°C";
+            
+            if (this.temp >= 26.5) {
+                document.getElementById('tempVal').style.color = "#f43f5e";
+                if(this.mode === 'experiment') document.getElementById('btnTyphoon').disabled = false;
+            }
+
+            // 2. 绘制场景
+            ctx.fillStyle = this.isHeating ? "rgba(244,63,94,0.3)" : "rgba(56,189,248,0.3)";
+            ctx.fillRect(250, waterY, 500, 100);
+            ctx.strokeStyle = "rgba(255,255,255,0.2)"; ctx.strokeRect(250, waterY, 500, 100);
+
+            ctx.fillStyle = "rgba(255,255,255,0.15)"; ctx.fillRect(240, glassY, 520, 10);
+
+            ctx.fillStyle = "rgba(220, 240, 255, 0.9)";
+            this.iceBlocks.forEach(ice => {
+                if(ice.h > 0) {
+                    ctx.fillRect(ice.x, ice.y - ice.h, 40, ice.h);
+                    ctx.fillStyle = "rgba(255,255,255,0.5)"; ctx.fillRect(ice.x, ice.y - ice.h, 40, 4); ctx.fillStyle = "rgba(220, 240, 255, 0.9)";
+                }
+            });
+
+            // 3. 粒子逻辑
+            if (this.isHeating) {
+                if (Math.random() < 0.3) this.bubbles.push({x: 260 + Math.random()*480, y: waterY + 80, v: 1 + Math.random()});
+                for (let k = 0; k < 4; k++) {
+                    this.particles.push({
+                        x: 300 + Math.random() * 400, y: waterY,
+                        vx: (Math.random() - 0.5) * 0.5, vy: -1.5 - Math.random(),
+                        type: 'vapor', life: 180, timer: 0
+                    });
+                }
+            }
+
+            // 气泡
+            ctx.fillStyle = "rgba(255,255,255,0.2)";
+            for(let i=this.bubbles.length-1; i>=0; i--) {
+                let b = this.bubbles[i]; b.y -= b.v;
+                ctx.beginPath(); ctx.arc(b.x, b.y, 2, 0, Math.PI*2); ctx.fill();
+                if(b.y < waterY) this.bubbles.splice(i, 1);
+            }
+
+            // 水汽/水珠/雨滴
+            for (let i = this.particles.length - 1; i >= 0; i--) {
+                let p = this.particles[i];
+
+                if (p.type === 'vapor') {
+                    p.x += p.vx; p.y += p.vy; p.life--;
+                    ctx.fillStyle = "rgba(255,255,255,0.4)"; ctx.beginPath(); ctx.arc(p.x, p.y, 3, 0, Math.PI*2); ctx.fill();
+
+                    if (p.y <= glassY + 10 && p.y >= glassY - 5 && p.x > 240 && p.x < 760) {
+                        let hitIce = false;
+                        for (let ice of this.iceBlocks) {
+                            if (ice.h > 0.5 && p.x > ice.x && p.x < ice.x + 40) {
+                                hitIce = true; 
+                                
+                                // === 核心修正：变速融化逻辑 ===
+                                let meltRate = (this.temp >= 26.5) ? 0.8 : 0.05; // 超过26.5度，融化速度暴增16倍
+                                ice.h -= meltRate;
+                                
+                                break;
+                            }
+                        }
+                        if (hitIce) {
+                            p.type = 'droplet'; p.y = glassY + 12; p.vx = 0; p.vy = 0; p.timer = 40 + Math.random() * 30;
+                        } else {
+                            if (Math.random() < 0.02) { p.type = 'droplet'; p.y = glassY + 12; p.timer = 20; } else { p.life = 0; }
+                        }
+                    }
+                }
+                else if (p.type === 'droplet') {
+                    p.timer--;
+                    ctx.fillStyle = "#38bdf8"; ctx.beginPath(); ctx.arc(p.x, p.y, 4, 0, Math.PI*2); ctx.fill();
+                    if (p.timer <= 0) { p.type = 'rain'; p.vy = 4 + Math.random() * 2; }
+                }
+                else if (p.type === 'rain') {
+                    p.y += p.vy;
+                    ctx.strokeStyle = "#38bdf8"; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(p.x, p.y); ctx.lineTo(p.x, p.y - 12); ctx.stroke();
+                    if (p.y > waterY) p.life = 0;
+                }
+                if (p.life <= 0) this.particles.splice(i, 1);
+            }
+        },
+
+        // --- 场景2：台风剖面结构 ---
+        drawTyphoonProfile: function(ctx, W, H) {
+            const centerX = W / 2;
+            const time = Date.now() / 300;
+            const seaY = 550;
+
+            const grad = ctx.createLinearGradient(0, seaY, 0, 650);
+            grad.addColorStop(0, "#1e3a8a"); grad.addColorStop(1, "#0f172a");
+            ctx.fillStyle = grad; ctx.fillRect(0, seaY, W, 100);
+
+            if (Math.random() < 0.8) {
+                let isLeft = Math.random() > 0.5;
+                let offset = 60 + Math.random() * 150;
+                this.clouds.push({
+                    x: centerX + (isLeft ? -offset : offset),
+                    y: seaY, r: 20 + Math.random() * 20, v: 1 + Math.random() * 2, life: 200
+                });
+            }
+
+            this.clouds.forEach((c, idx) => {
+                c.y -= c.v; c.life--;
+                ctx.beginPath(); ctx.arc(c.x, c.y, c.r, 0, Math.PI*2);
+                let alpha = c.y < 100 ? c.life/100 : 0.5;
+                ctx.fillStyle = `rgba(220, 230, 255, ${alpha})`; ctx.fill();
+                if (c.life <= 0) this.clouds.splice(idx, 1);
+            });
+
+            // 限制降雨范围 (低空 + 亮蓝色)
+            if (Math.random() < 0.9) {
+                this.profileRain.push({x: centerX - 60 - Math.random()*140, y: seaY - 100 + Math.random()*50, vy: 8+Math.random()*5});
+                this.profileRain.push({x: centerX + 60 + Math.random()*140, y: seaY - 100 + Math.random()*50, vy: 8+Math.random()*5});
+            }
+
+            ctx.strokeStyle = "#00ffff"; 
+            ctx.lineWidth = 1.5;
+            for(let i=this.profileRain.length-1; i>=0; i--) {
+                let r = this.profileRain[i];
+                r.y += r.vy;
+                ctx.beginPath(); ctx.moveTo(r.x, r.y); ctx.lineTo(r.x, r.y - 10); ctx.stroke();
+                if(r.y > seaY) this.profileRain.splice(i, 1);
+            }
+
+            ctx.lineWidth = 3;
+            // 底部流入
+            ctx.strokeStyle = "#f43f5e"; ctx.fillStyle = "#f43f5e";
+            this.drawMovingArrow(ctx, 50, 580, centerX-80, 580, time, "in");
+            this.drawMovingArrow(ctx, 950, 580, centerX+80, 580, time, "in");
+            // 上升
+            this.drawMovingArrow(ctx, centerX-100, 550, centerX-80, 100, time, "up");
+            this.drawMovingArrow(ctx, centerX+100, 550, centerX+80, 100, time, "up");
+            // 顶部流出 (向内汇聚)
+            ctx.strokeStyle = "#38bdf8"; ctx.fillStyle = "#38bdf8";
+            this.drawMovingArrow(ctx, 100, 80, centerX-60, 80, time, "in_top"); 
+            this.drawMovingArrow(ctx, 900, 80, centerX+60, 80, time, "in_top"); 
+            // 下沉
+            this.drawMovingArrow(ctx, centerX, 50, centerX, 500, time, "down");
+
+            // 字体纯白
+            ctx.fillStyle = "#ffffff"; 
+            ctx.font = "bold 16px Microsoft YaHei"; 
+            ctx.textAlign = "center";
+            ctx.textBaseline = "middle";
+            
+            let labelY = 530; 
+            ctx.fillText("台风眼", centerX, labelY);
+            ctx.fillText("云墙", centerX - 260, 350); 
+            ctx.fillText("云墙", centerX + 260, 350);
+            
+            ctx.font = "14px Microsoft YaHei"; 
+            ctx.strokeStyle = "rgba(255,255,255,0.3)"; ctx.lineWidth = 1;
+            ctx.beginPath();
+            ctx.moveTo(centerX-300, 550); ctx.lineTo(centerX-300, 520);
+            ctx.moveTo(centerX-80, 550); ctx.lineTo(centerX-80, 520);
+            ctx.moveTo(centerX+80, 550); ctx.lineTo(centerX+80, 520);
+            ctx.moveTo(centerX+300, 550); ctx.lineTo(centerX+300, 520);
+            ctx.stroke();
+
+            ctx.fillText("旋涡风雨区", centerX - 190, labelY);
+            ctx.fillText("旋涡风雨区", centerX + 190, labelY);
+            ctx.fillText("外围大风区", centerX - 400, labelY);
+            ctx.fillText("外围大风区", centerX + 400, labelY);
+            
+            ctx.fillStyle = "#38bdf8"; 
+            ctx.fillText("下沉气流", centerX, 300);
+        },
+
+        drawMovingArrow: function(ctx, x1, y1, x2, y2, t, type) {
+            let dx = x2 - x1;
+            let dy = y2 - y1;
+            let dist = Math.sqrt(dx*dx + dy*dy);
+            let angle = Math.atan2(dy, dx);
+            let travel = (t * 60) % dist; 
+            let cx = x1 + Math.cos(angle) * travel;
+            let cy = y1 + Math.sin(angle) * travel;
+
+            ctx.save();
+            ctx.translate(cx, cy);
+            ctx.rotate(angle);
+            ctx.beginPath();
+            ctx.moveTo(8, 0); ctx.lineTo(-6, 6); ctx.lineTo(-6, -6);
+            ctx.fill();
+            ctx.restore();
+
+            ctx.beginPath();
+            ctx.moveTo(x1, y1); ctx.lineTo(x2, y2);
+            ctx.setLineDash([5, 10]); ctx.stroke(); ctx.setLineDash([]);
+        }
+    };
+
+    app.init();
+
+</script>
+</body>
+</html>
